@@ -1,25 +1,31 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
+import logging
 
-from app.routes.chat import router as chat_router
-from app.llm.providers.groq import GroqProvider  
+from app.application.chat_service import ChatService
 from app.llm.exceptions import LLMConfigurationError
+from app.llm.providers.groq import GroqProvider
+from app.routes.chat import router as chat_router
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Al arrancar FastAPI, inicializamos el cliente de Groq
+    provider = None
     try:
-        app.state.llm_provider = GroqProvider()
-        print("GroqProvider inicializado correctamente.")
+        provider = GroqProvider()
+        app.state.chat_service = ChatService(provider)
+        logger.info("ChatService y GroqProvider inicializados correctamente.")
+        yield
     except LLMConfigurationError as e:
-        print(f"ADVERTENCIA: {e}")
-        # Opcionalmente podrías lanzar el error aquí para detener el servidor
-    
-    yield
-    
-    # Al apagar FastAPI, cerramos la conexión
-    if hasattr(app.state, "llm_provider"):
-        await app.state.llm_provider.close()
+        logger.critical(f"Error fatal de configuración: {e}")
+        # Detiene el servidor si no hay API Key
+        raise RuntimeError("No se puede iniciar el servidor sin configuración válida.") from e
+    finally:
+        if provider is not None:
+            await provider.close()
+            logger.info("Cliente de Groq cerrado.")
 
 app = FastAPI(
     title="Academic Chat Assistant",

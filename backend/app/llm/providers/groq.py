@@ -34,13 +34,17 @@ class GroqProvider(LLMProvider):
         except ValueError as e:
             raise LLMConfigurationError(str(e))
             
-        # max_retries=0 porque nosotros manejamos los reintentos abajo
         self.client = AsyncGroq(
             api_key=api_key, 
             timeout=GROQ_TIMEOUT_SECONDS, 
-            max_retries=0
+            max_retries=0                       #  Reintentos
         )
         self.model = GROQ_MODEL
+        self.max_retries = GROQ_MAX_RETRIES
+
+    async def _backoff(self, attempt: int):
+        wait = (2 ** attempt) + random.uniform(0, 0.5)
+        await asyncio.sleep(wait)
 
     async def generate(
         self,
@@ -49,9 +53,8 @@ class GroqProvider(LLMProvider):
         temperature: float = 0.2,
         max_tokens: int = 800,
     ) -> str:
-        last_exception = None
-
-        for attempt in range(GROQ_MAX_RETRIES + 1):
+        
+        for attempt in range(self.max_retries + 1):
             try:
                 response = await self.client.chat.completions.create(
                     model=self.model,
@@ -59,41 +62,54 @@ class GroqProvider(LLMProvider):
                     temperature=temperature,
                     max_completion_tokens=max_tokens,
                 )
-                return response.choices[0].message.content
-
-            except RateLimitError as e:
-                last_exception = e
-                if attempt == GROQ_MAX_RETRIES:
-                    raise LLMRateLimitError("Límite de uso de Groq excedido.") from e
-                wait = (2 ** attempt) + random.uniform(0, 0.5)
-                logger.warning(f"Rate limit (429). Reintentando en {wait:.2f}s...")
-                await asyncio.sleep(wait)
-
-            except APITimeoutError as e:
-                last_exception = e
-                if attempt == GROQ_MAX_RETRIES:
-                    raise LLMTimeoutError("Tiempo de espera agotado al conectar con Groq.") from e
-                wait = (2 ** attempt) + random.uniform(0, 0.5)
-                logger.warning(f"Timeout. Reintentando en {wait:.2f}s...")
-                await asyncio.sleep(wait)
-
-            except APIStatusError as e:
-                # 401, 403, 404 no se reintentan porque no se arreglan solos
-                if e.status_code in [401, 403, 404]:
-                    logger.error(f"Error de cliente Groq: {e.status_code}")
-                    raise LLMProviderError(f"Error de configuración con Groq: {e.status_code}") from e
                 
-                last_exception = e
-                if attempt == GROQ_MAX_RETRIES:
-                    raise LLMProviderError(f"Fallo de Groq después de varios intentos: {e.status_code}") from e
-                wait = (2 ** attempt) + random.uniform(0, 0.5)
-                await asyncio.sleep(wait)
+                # Validación de respuesta
+                if not response.choices:
+                    raise LLMProviderError("El proveedor devolvió una respuesta sin opciones.")
+                
+                content = response.choices[0].message.content
+                if not isinstance(content, str) or not content.strip():
+                    raise LLMProviderError("El proveedor no devolvió texto válido.")
+                
+                return content.strip()
 
-            except Exception as e:
+            except RateLimitError as exc:
+                if attempt >= self.max_retries:
+                    raise LLMRateLimitError("Límite de uso de Groq excedido.") from exc
+                logger.warning("Rate limit (429). Reintentando...")
+                await self._backoff(attempt)
+
+            except APITimeoutError as exc:
+                if attempt >= self.max_retries:
+                    raise LLMTimeoutError("Tiempo de espera agotado.") from exc
+                logger.warning("Timeout. Reintentando...")
+                await self._backoff(attempt)
+                
+            except APIConnectionError as exc:
+                if attempt >= self.max_retries:
+                    raise LLMProviderError("Fallo de conexión de red.") from exc
+                logger.warning("Error de red. Reintentando...")
+                await self._backoff(attempt)
+
+            except APIStatusError as exc:
+                # Errores 5xx son del servidor (reintentar). 
+                # 4xx son errores del cliente (NO reintentar).
+                if exc.status_code in [500, 502, 503, 504]:
+                    if attempt >= self.max_retries:
+                        raise LLMProviderError(f"Fallo en servidores de Groq: {exc.status_code}") from exc
+                    logger.warning(f"Error 5xx ({exc.status_code}). Reintentando...")
+                    await self._backoff(attempt)
+                else:
+                    # 400, 401, 403, 404, 422 no se arreglan solos.
+                    logger.error(f"Error de cliente Groq: {exc.status_code}")
+                    raise LLMProviderError(f"Error de configuración o petición: {exc.status_code}") from exc
+
+            except LLMProviderError:
+                # Errores de validación propios, no reintentar.
+                raise
+            except Exception as exc:
                 logger.exception("Error inesperado en GroqProvider")
-                raise LLMProviderError("Error interno al comunicarse con Groq.") from e
-
-        raise LLMProviderError(f"Fallo después de {GROQ_MAX_RETRIES} intentos: {last_exception}")
+                raise LLMProviderError("Error interno al comunicarse con Groq.") from exc
 
     async def close(self):
         await self.client.close()
