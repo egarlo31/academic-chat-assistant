@@ -14,3 +14,9 @@ __pycache__/
 # Sistema
 .DS_Store
 Thumbs.db
+
+# Entornos virtuales y datos
+tutor_env/
+data/
+__pycache__/
+*.pdf.vscode/
