@@ -12,6 +12,7 @@ __pycache__/
 .pytest_cache/
 
 # Sistema
+.vscode/
 .DS_Store
 Thumbs.db
 
@@ -20,3 +21,10 @@ tutor_env/
 data/
 __pycache__/
 *.pdf.vscode/
+
+# Datos de prueba y archivos generados
+data/
+*.pdf
+
+# Logs
+*.log
