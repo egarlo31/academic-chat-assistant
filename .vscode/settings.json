@@ -1,0 +1,7 @@
+{
+    "python.analysis.extraPaths": [
+        "./backend"
+    ],
+    "python.defaultInterpreterPath": "./tutor_env/bin/python",
+    "python.terminal.useEnvFile": true
+}
