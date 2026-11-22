@@ -19,12 +19,16 @@ Thumbs.db
 # Entornos virtuales y datos
 tutor_env/
 data/
-__pycache__/
-*.pdf.vscode/
-
-# Datos de prueba y archivos generados
-data/
 *.pdf
+
+# Node y frontend
+node_modules/
+dist/
+coverage/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
 
 # Logs
 *.log
